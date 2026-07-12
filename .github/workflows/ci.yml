@@ -1,0 +1,71 @@
+name: CI
+
+on:
+    pull_request:
+        branches:
+            - main
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+env:
+    CI: true
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+    cancel-in-progress: true
+
+jobs:
+    lint:
+        name: Lint
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+            - uses: pnpm/action-setup@v2
+              with:
+                  version: 8
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm exec eslint . --max-warnings=0 --ext .js,.jsx,.ts,.tsx
+
+    typecheck:
+        name: Type check
+        runs-on: ubuntu-latest
+        needs: lint
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+            - uses: pnpm/action-setup@v2
+              with:
+                  version: 8
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm exec tsc --noEmit
+
+    build:
+        name: Build
+        runs-on: ubuntu-latest
+        needs: [lint, typecheck]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+            - uses: pnpm/action-setup@v2
+              with:
+                  version: 8
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build

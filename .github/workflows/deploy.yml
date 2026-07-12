@@ -1,0 +1,88 @@
+name: CD
+
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+env:
+    CI: true
+
+concurrency:
+    group: cd-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+    cancel-in-progress: true
+
+jobs:
+    verify:
+        name: Verify build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+            - uses: pnpm/action-setup@v2
+              with:
+                  version: 8
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+
+    preview:
+        name: Preview deploy
+        needs: verify
+        if: github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+            - uses: pnpm/action-setup@v2
+              with:
+                  version: 8
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - uses: amondnet/vercel-action@v21
+              with:
+                  vercel-token: ${{ secrets.VERCEL_TOKEN }}
+                  vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+                  vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+                  github-comment: true
+                  vercel-args: "--confirm"
+
+    production:
+        name: Production deploy
+        needs: verify
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        environment:
+            name: production
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+            - uses: pnpm/action-setup@v2
+              with:
+                  version: 8
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - uses: amondnet/vercel-action@v21
+              with:
+                  vercel-token: ${{ secrets.VERCEL_TOKEN }}
+                  vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+                  vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+                  prod-branch: main
+                  github-comment: true
+                  vercel-args: "--prod --confirm"
