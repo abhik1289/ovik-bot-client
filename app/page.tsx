@@ -1,130 +1,261 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react";
-
-import { useAuth } from "@/components/auth-provider";
-import { GoogleLoginButton } from "@/components/google-login-button";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  ArrowRight,
+  Bot,
+  Database,
+  FileText,
+  ShieldCheck,
+} from "lucide-react";
 
-export default function Home() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/chat";
+const highlights = [
+  {
+    title: "Real-time chat",
+    description: "Stream responses from the backend with a clean, focused interface.",
+    icon: Bot,
+  },
+  {
+    title: "Document Q&A",
+    description: "Upload PDFs and ask grounded questions using a simple RAG workflow.",
+    icon: FileText,
+  },
+  {
+    title: "Structured retrieval",
+    description: "Combine vector search with concise prompting for reliable answers.",
+    icon: Database,
+  },
+  {
+    title: "Secure by design",
+    description: "Built for authenticated access and production-minded backend flows.",
+    icon: ShieldCheck,
+  },
+];
 
-  useEffect(() => {
-    if (!loading && user) {
-      router.replace(nextPath);
-    }
-  }, [loading, user, nextPath, router]);
-
-  const handleTryME = async () => {
-    // Redirect to the backend's Google OAuth2 authorization endpoint
-
-    const token = localStorage.getItem("OVIKBOT_TOKEN");
-
-    const res = await fetch("http://localhost:8080/api/user/me", {
-      method: "GET",
-      headers: {
-        authorization: "Bearer " + token,
-      },
-    });
-    console.log(res.status);
-  };
-
+export default function HomePage() {
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.98),_rgba(244,238,228,0.96)_38%,_rgba(231,220,205,0.94)_100%)] px-4 py-8 text-[#23180f] sm:px-6">
-      <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl gap-6 lg:grid-cols-[1.2fr_0.9fr]">
-        <section className="flex flex-col justify-between rounded-[36px] border border-black/8 bg-white/60 p-8 shadow-[0_30px_120px_-48px_rgba(0,0,0,0.45)] backdrop-blur lg:p-10">
-          <div>
-            <Badge className="bg-[#171717] text-white">
-              Google Sign-In Only
-              <Button onClick={handleTryME}>TRY ME</Button>
-            </Badge>
-            <h1 className="mt-6 max-w-3xl text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl">
-              Secure access to AvikBot with your Google account.
-            </h1>
-            <p className="mt-5 max-w-2xl text-base leading-8 text-[#5f4f3d]">
-              You click sign-in, Spring Security talks to Google on your behalf,
-              and every protected API is available only through a JWT session
-              cookie set by the backend.
+    <main className="min-h-screen bg-[linear-gradient(180deg,#f7f8fa_0%,#ffffff_42%,#f5f6f8_100%)] text-foreground">
+      <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 sm:px-10 lg:px-16">
+        <header className="flex items-center justify-between border-b border-black/6 pb-6">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-2xl border border-black/8 bg-white shadow-[0_8px_30px_-18px_rgba(0,0,0,0.35)]">
+              <span className="text-sm font-semibold tracking-[0.2em]">A</span>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-muted-foreground">
+                AI Workspace
+              </p>
+              <h1 className="text-base font-semibold">AvikBot</h1>
+            </div>
+          </div>
+
+          <nav className="hidden items-center gap-8 text-sm text-muted-foreground md:flex">
+            <a href="#capabilities" className="transition hover:text-foreground">
+              Capabilities
+            </a>
+            <a href="#workflow" className="transition hover:text-foreground">
+              Workflow
+            </a>
+            <Link
+              href="/chat"
+              className="rounded-full border border-black/10 bg-white px-4 py-2 text-foreground transition hover:bg-muted">
+              Open App
+            </Link>
+          </nav>
+        </header>
+
+        <div className="grid flex-1 items-center gap-14 py-16 lg:grid-cols-[1.15fr_0.85fr] lg:py-24">
+          <div className="max-w-3xl">
+            <div className="inline-flex items-center rounded-full border border-black/8 bg-white/80 px-4 py-1.5 text-xs uppercase tracking-[0.24em] text-muted-foreground shadow-[0_12px_40px_-30px_rgba(0,0,0,0.45)]">
+              Professional AI Assistant Platform
+            </div>
+
+            <h2 className="mt-7 text-5xl font-semibold tracking-[-0.04em] text-[#111317] sm:text-6xl">
+              A focused workspace for chat, retrieval, and document-backed answers.
+            </h2>
+
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-[#5e6470]">
+              AvikBot brings together live AI chat and PDF-based question answering
+              in a streamlined interface built for clarity, speed, and practical
+              backend integration.
             </p>
+
+            <div className="mt-10 flex flex-col gap-4 sm:flex-row">
+              <Link
+                href="/chat"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-[#12151b] px-6 py-3 text-sm font-medium text-white transition hover:bg-[#1a1f28]">
+                Launch Workspace
+                <ArrowRight className="size-4" />
+              </Link>
+              <a
+                href="#workflow"
+                className="inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-6 py-3 text-sm font-medium text-foreground transition hover:bg-muted">
+                View Workflow
+              </a>
+            </div>
+
+            <div className="mt-12 grid gap-4 sm:grid-cols-3">
+              <Metric label="Streaming" value="Live responses" />
+              <Metric label="RAG" value="PDF Q&A" />
+              <Metric label="Backend" value="Spring + AI" />
+            </div>
           </div>
 
-          <div className="grid gap-4 pt-8 sm:grid-cols-3">
-            <Card className="border-black/8 bg-white/72 shadow-none">
-              <CardContent className="py-6">
-                <ShieldCheck className="size-6 text-[#8d6234]" />
-                <p className="mt-4 font-medium">Verified Google identity</p>
-              </CardContent>
-            </Card>
-            <Card className="border-black/8 bg-white/72 shadow-none">
-              <CardContent className="py-6">
-                <Sparkles className="size-6 text-[#8d6234]" />
-                <p className="mt-4 font-medium">JWT-protected backend routes</p>
-              </CardContent>
-            </Card>
-            <Card className="border-black/8 bg-white/72 shadow-none">
-              <CardContent className="py-6">
-                <ArrowRight className="size-6 text-[#8d6234]" />
-                <p className="mt-4 font-medium">
-                  Direct path into the chat app
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </section>
-
-        <aside className="flex items-center">
-          <Card className="w-full rounded-[32px] border-black/8 bg-[#171717] text-white shadow-[0_24px_90px_-45px_rgba(0,0,0,0.65)]">
-            <CardHeader>
-              <Badge className="w-fit border-white/10 bg-white/10 text-white">
-                Authentication
-              </Badge>
-              <CardTitle className="mt-3 text-3xl">
-                Continue with Google
-              </CardTitle>
-              <CardDescription className="text-white/70">
-                Manual login is disabled. Use your Google account to enter the
-                workspace.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-6">
-              <div className="rounded-[28px] border border-white/10 bg-white/5 p-6">
-                <GoogleLoginButton />
+          <div className="relative">
+            <div className="absolute inset-0 rounded-[2rem] bg-[radial-gradient(circle_at_top,_rgba(18,21,27,0.08),_transparent_58%)]" />
+            <div className="relative overflow-hidden rounded-[2rem] border border-black/8 bg-white/90 p-6 shadow-[0_40px_120px_-50px_rgba(0,0,0,0.28)] backdrop-blur">
+              <div className="flex items-center justify-between border-b border-black/6 pb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+                    Workspace Preview
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-foreground">
+                    Minimal, production-oriented experience
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <span className="size-2 rounded-full bg-[#cfd4dc]" />
+                  <span className="size-2 rounded-full bg-[#cfd4dc]" />
+                  <span className="size-2 rounded-full bg-[#cfd4dc]" />
+                </div>
               </div>
 
-              {user ? (
-                <div className="rounded-3xl bg-white/8 p-4">
-                  <p className="text-sm uppercase tracking-[0.22em] text-white/50">
-                    Current session
+              <div className="space-y-4 py-6">
+                <div className="rounded-2xl bg-[#f5f6f8] p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">
+                    Use case
                   </p>
-                  <p className="mt-2 font-medium">{user.name}</p>
-                  <p className="text-sm text-white/70">{user.email}</p>
+                  <p className="mt-2 text-sm leading-7 text-[#3d4450]">
+                    Ask a direct question, stream the answer instantly, or switch
+                    to PDF mode to retrieve answers grounded in uploaded content.
+                  </p>
                 </div>
-              ) : null}
 
-              <Button
-                className="w-full rounded-2xl bg-[#d7a86e] text-[#21150b] hover:bg-[#c9985b]"
-                onClick={() => router.push("/chat")}
-                disabled={!user}>
-                Open workspace
-              </Button>
-            </CardContent>
-          </Card>
-        </aside>
-      </div>
+                <div className="grid gap-3">
+                  {highlights.slice(0, 3).map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <div
+                        key={item.title}
+                        className="flex items-start gap-3 rounded-2xl border border-black/6 p-4">
+                        <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[#12151b] text-white">
+                          <Icon className="size-4" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-semibold text-foreground">
+                            {item.title}
+                          </h3>
+                          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                            {item.description}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="capabilities"
+        className="border-y border-black/6 bg-white/80 px-6 py-16 sm:px-10 lg:px-16">
+        <div className="mx-auto max-w-7xl">
+          <div className="max-w-2xl">
+            <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+              Capabilities
+            </p>
+            <h3 className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-[#111317]">
+              Built to stay simple on the surface and practical underneath.
+            </h3>
+          </div>
+
+          <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {highlights.map((item) => {
+              const Icon = item.icon;
+              return (
+                <article
+                  key={item.title}
+                  className="rounded-[1.75rem] border border-black/6 bg-[#fbfbfc] p-6 transition hover:bg-white">
+                  <div className="flex size-11 items-center justify-center rounded-2xl bg-[#12151b] text-white">
+                    <Icon className="size-5" />
+                  </div>
+                  <h4 className="mt-5 text-lg font-semibold">{item.title}</h4>
+                  <p className="mt-2 text-sm leading-7 text-muted-foreground">
+                    {item.description}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="workflow"
+        className="mx-auto max-w-7xl px-6 py-16 sm:px-10 lg:px-16 lg:py-20">
+        <div className="grid gap-8 lg:grid-cols-[0.8fr_1.2fr]">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+              Workflow
+            </p>
+            <h3 className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-[#111317]">
+              A straightforward flow you can explain clearly in demos and interviews.
+            </h3>
+          </div>
+
+          <div className="grid gap-4">
+            <WorkflowStep
+              number="01"
+              title="Open the workspace"
+              description="Start with direct AI chat or switch into PDF-backed RAG mode from the same interface."
+            />
+            <WorkflowStep
+              number="02"
+              title="Upload and index a PDF"
+              description="The backend reads the PDF, chunks the text, and stores embeddings in the vector database."
+            />
+            <WorkflowStep
+              number="03"
+              title="Ask grounded questions"
+              description="Relevant chunks are retrieved first, then passed into the model as context for a concise answer."
+            />
+          </div>
+        </div>
+      </section>
     </main>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-black/6 bg-white/75 px-4 py-4 shadow-[0_16px_40px_-36px_rgba(0,0,0,0.5)]">
+      <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function WorkflowStep({
+  number,
+  title,
+  description,
+}: {
+  number: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-[1.75rem] border border-black/6 bg-white p-6 shadow-[0_24px_60px_-50px_rgba(0,0,0,0.4)]">
+      <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
+        {number}
+      </p>
+      <h4 className="mt-3 text-lg font-semibold text-foreground">{title}</h4>
+      <p className="mt-2 text-sm leading-7 text-muted-foreground">
+        {description}
+      </p>
+    </div>
   );
 }

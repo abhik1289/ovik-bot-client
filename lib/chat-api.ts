@@ -1,43 +1,11 @@
 "use client";
 
-/**
- * Thin client for the OvikBot Spring backend chat endpoints.
- *
- * All endpoints require an authenticated session (JWT cookie set by
- * the OAuth2 success handler). Credentials are always included so the
- * cookie is sent on cross-origin requests to the backend.
- */
+/** Thin client for the Spring backend chat endpoints. */
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ??
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   "http://localhost:8080";
-
-export type ChatSource = {
-  /** Document name / chunk title returned by the RAG pipeline. */
-  name?: string;
-  /** Optional snippet of the matched content. */
-  snippet?: string;
-  /** Optional score (cosine similarity). */
-  score?: number;
-};
-
-export type ChatTurn = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  sources?: ChatSource[];
-  /** `true` while the assistant stream is still producing tokens. */
-  pending?: boolean;
-  /** Set when the request failed so the UI can render the error inline. */
-  error?: string;
-};
-
-export type UploadResult = {
-  filename: string;
-  bytes: number;
-  message: string;
-};
 
 /** Plain error returned by the backend when something goes wrong. */
 type ApiErrorPayload = {
@@ -45,7 +13,7 @@ type ApiErrorPayload = {
   message?: string;
 };
 
-async function parseError(response: Response): Promise<string> {
+export async function parseError(response: Response): Promise<string> {
   try {
     const data = (await response.json()) as ApiErrorPayload;
     return data.error ?? data.message ?? `Request failed (${response.status})`;
@@ -63,60 +31,11 @@ export class ChatApiError extends Error {
   }
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new ChatApiError(await parseError(response), response.status);
-  }
-  // Some endpoints (e.g. /chat/ask) return plain text.
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    return (await response.json()) as T;
-  }
-  return (await response.text()) as unknown as T;
-}
-
-/** Simple, non-streaming chat completion backed by the Gemini model. */
-export async function sendChat(
-  message: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ message }),
-    signal,
-  });
-  if (!response.ok) {
-    throw new ChatApiError(await parseError(response), response.status);
-  }
-  const data = (await response.json()) as { response?: string };
-  return data.response ?? "";
-}
-
-/** RAG-augmented chat completion. Returns plain text. */
-export async function askFromRag(
-  message: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/chat/ask`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ message }),
-    signal,
-  });
-  if (!response.ok) {
-    throw new ChatApiError(await parseError(response), response.status);
-  }
-  return await response.text();
-}
+export type UploadResult = {
+  filename: string;
+  bytes: number;
+  message: string;
+};
 
 /**
  * Streaming chat completion via Server-Sent Events.
@@ -186,11 +105,29 @@ export function streamChat(
   return () => controller.abort();
 }
 
+export async function askFromRag(
+  message: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/chat/rag/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ message }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new ChatApiError(await parseError(response), response.status);
+  }
+  const data = (await response.json()) as { response?: string };
+  return data.response ?? "";
+}
+
 export async function uploadFile(file: File): Promise<UploadResult> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}/chat/upload`, {
+  const response = await fetch(`${API_BASE_URL}/chat/rag/upload`, {
     method: "POST",
     credentials: "include",
     body: formData,
@@ -206,4 +143,3 @@ export async function uploadFile(file: File): Promise<UploadResult> {
 }
 
 export { API_BASE_URL };
-export { postJson };

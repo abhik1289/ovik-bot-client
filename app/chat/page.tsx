@@ -1,10 +1,7 @@
-import { AuthGuard } from "@/components/auth-guard";
-import { ChatWorkspace } from "@/components/chat-workspace";
+import { SimpleChatWorkspace } from "@/components/simple-chat-workspace";
 
 export default function ChatPage() {
   return (
-    // <AuthGuard>
-      <ChatWorkspace />
-    // </AuthGuard>
+    <SimpleChatWorkspace />
   );
 }

@@ -1,11 +1,12 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 
-export default function AuthFailurePage() {
+function AuthFailureInner() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
 
@@ -31,5 +32,18 @@ export default function AuthFailurePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function AuthFailurePage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.98),_rgba(244,238,228,0.96)_38%,_rgba(231,220,205,0.94)_100%)] px-4 text-[#23180f]">
+          <p className="text-sm text-[#5f4f3d]">Loading...</p>
+        </main>
+      }>
+      <AuthFailureInner />
+    </Suspense>
   );
 }
