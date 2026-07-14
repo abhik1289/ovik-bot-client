@@ -1,439 +1,880 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 import {
-  ArrowUpRight,
+  AlertTriangle,
+  CheckCircle2,
   FileText,
-  PanelLeft,
-  Plus,
+  Globe,
+  Loader2,
+  LogOut,
+  MessageSquarePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Paperclip,
   Search,
-  SendHorizonal,
-  Sparkles,
-  Stars,
-  Upload,
+  SendHorizontal,
+  Square,
+  UploadCloud,
+  X,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useAuth } from "@/components/auth-provider";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+  ChatApiError,
+  askFromRag,
+  streamChat,
+  uploadFile,
+} from "@/lib/chat-api";
 
-const historyItems = [
-  {
-    title: "Q3 planning sync",
-    preview: "Summaries, blockers, and next sprint notes",
-    time: "2 min ago",
-  },
-  {
-    title: "Marketing launch copy",
-    preview: "Homepage headlines and CTA variations",
-    time: "18 min ago",
-  },
-  {
-    title: "Investor FAQ draft",
-    preview: "Tightened responses around roadmap and pricing",
-    time: "Yesterday",
-  },
-  {
-    title: "Design review notes",
-    preview: "Collected action items from the product critique",
-    time: "Yesterday",
-  },
+type Role = "user" | "assistant";
+
+type Attachment = {
+  id: string;
+  file: File;
+  status: "uploading" | "uploaded" | "error";
+  message?: string;
+};
+
+type Message = {
+  id: string;
+  role: Role;
+  content: string;
+  pending?: boolean;
+  error?: string;
+  /** True while tokens are still streaming in. */
+  streaming?: boolean;
+};
+
+type Mode = "chat" | "rag";
+
+type Conversation = {
+  id: string;
+  title: string;
+  preview: string;
+  updatedAt: string;
+  messages: Message[];
+  mode: Mode;
+};
+
+const starterPrompts = [
+  "Draft a professional reply to a client about project timelines.",
+  "Summarize the key points from my latest document.",
+  "Explain a complex topic in simple terms.",
+  "Help me brainstorm names for a new product feature.",
 ];
 
-const messages = [
-  {
-    role: "assistant",
-    content:
-      "Welcome back. I can help draft answers, refine product thinking, and keep your work organized in one place.",
-  },
-  {
-    role: "user",
-    content: "Prepare a concise reply for a client asking about onboarding timelines.",
-  },
-  {
-    role: "assistant",
-    content:
-      "Absolutely. A polished response could confirm the usual kickoff window, outline the first milestones, and invite the client to share deadlines so we can tailor the rollout.",
-  },
+const ragStarterPrompts = [
+  "What does the knowledge base say about our onboarding process?",
+  "Summarize the most recent policy document.",
+  "Find anything related to refund procedures.",
+  "Quote the section on data retention.",
 ];
 
-const indexedFiles = [
-  { name: "Product requirements.pdf", size: "4.8 MB", status: "Indexed" },
-  { name: "Sales handbook.pdf", size: "2.1 MB", status: "Ready" },
-  { name: "Support playbook.pdf", size: "1.7 MB", status: "Ready" },
-];
+function createId() {
+  return `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function buildWelcomeConversation(): {
+  conversation: Conversation;
+  activeId: string;
+} {
+  const id = `chat-${Date.now()}`;
+  return {
+    activeId: id,
+    conversation: {
+      id,
+      title: "New chat",
+      preview: "Start a conversation with AvikBot.",
+      updatedAt: "Just now",
+      mode: "chat",
+      messages: [
+        {
+          id: createId(),
+          role: "assistant",
+          content:
+            "Hi, I'm AvikBot. Ask me anything, or pick one of the suggestions below to get started.",
+        },
+      ],
+    },
+  };
+}
 
 export function ChatWorkspace() {
+  const [{ conversations, activeId }, setConversationState] = useState<{
+    conversations: Conversation[];
+    activeId: string;
+  }>(() => {
+    const seed = buildWelcomeConversation();
+    return { conversations: [seed.conversation], activeId: seed.activeId };
+  });
+  const [draft, setDraft] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [historyQuery, setHistoryQuery] = useState("");
-  const [activeTab, setActiveTab] = useState("assistant");
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
-  const filteredHistory = useMemo(() => {
+  const setConversations = (
+    updater: (prev: Conversation[]) => Conversation[],
+  ) => {
+    setConversationState((prev) => ({
+      ...prev,
+      conversations: updater(prev.conversations),
+    }));
+  };
+  const setActiveId = (id: string) => {
+    setConversationState((prev) => ({ ...prev, activeId: id }));
+  };
+
+  const { user, signOut } = useAuth();
+  const router = useRouter();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cancelStreamRef = useRef<(() => void) | null>(null);
+
+  const activeConversation = useMemo(
+    () => conversations.find((c) => c.id === activeId) ?? conversations[0],
+    [conversations, activeId],
+  );
+
+  const filteredConversations = useMemo(() => {
     const query = historyQuery.trim().toLowerCase();
+    if (!query) return conversations;
+    return conversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(query) ||
+        c.preview.toLowerCase().includes(query),
+    );
+  }, [conversations, historyQuery]);
 
-    if (!query) {
-      return historyItems;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [
+    activeConversation?.messages.length,
+    activeConversation?.messages[activeConversation.messages.length - 1]
+      ?.content,
+    activeConversation?.messages[activeConversation.messages.length - 1]
+      ?.streaming,
+    isStreaming,
+    activeId,
+  ]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }, [draft]);
+
+  // Cleanup any in-flight stream on unmount.
+  useEffect(() => {
+    return () => {
+      cancelStreamRef.current?.();
+    };
+  }, []);
+
+  const updateConversation = (
+    id: string,
+    updater: (c: Conversation) => Conversation,
+  ) => {
+    setConversations((prev) => prev.map((c) => (c.id === id ? updater(c) : c)));
+  };
+
+  const handleNewChat = () => {
+    cancelStreamRef.current?.();
+    setIsStreaming(false);
+    const id = `chat-${Date.now()}`;
+    const fresh: Conversation = {
+      id,
+      title: "New chat",
+      preview: "Start a conversation with AvikBot.",
+      updatedAt: "Just now",
+      mode: activeConversation?.mode ?? "chat",
+      messages: [
+        {
+          id: createId(),
+          role: "assistant",
+          content:
+            activeConversation?.mode === "rag"
+              ? "RAG mode is on — attach documents below or ask a question about the knowledge base."
+              : "Hi, I'm AvikBot. Ask me anything, or pick one of the suggestions below to get started.",
+        },
+      ],
+    };
+    setConversations((prev) => [fresh, ...prev]);
+    setActiveId(id);
+    setDraft("");
+    setAttachments([]);
+  };
+
+  const handleSelectConversation = (id: string) => {
+    cancelStreamRef.current?.();
+    setIsStreaming(false);
+    setActiveId(id);
+  };
+
+  const handleDeleteConversation = (id: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    cancelStreamRef.current?.();
+    setIsStreaming(false);
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      if (id === activeId) {
+        setActiveId(next[0]?.id ?? "");
+      }
+      if (next.length === 0) {
+        const fresh: Conversation = {
+          id: `chat-${Date.now()}`,
+          title: "New chat",
+          preview: "Start a conversation with AvikBot.",
+          updatedAt: "Just now",
+          mode: "chat",
+          messages: [
+            {
+              id: createId(),
+              role: "assistant",
+              content:
+                "Hi, I'm AvikBot. Ask me anything, or pick one of the suggestions below to get started.",
+            },
+          ],
+        };
+        setActiveId(fresh.id);
+        return [fresh];
+      }
+      return next;
+    });
+  };
+
+  const handleSetMode = (mode: Mode) => {
+    if (!activeConversation) return;
+    updateConversation(activeConversation.id, (c) => ({ ...c, mode }));
+  };
+
+  const handlePickAttachment = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelected = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const accepted: Attachment[] = [];
+    for (const file of Array.from(files)) {
+      const att: Attachment = {
+        id: createId(),
+        file,
+        status: "uploading",
+      };
+      accepted.push(att);
+      // Fire-and-forget upload. The UI updates optimistically.
+      uploadFile(file)
+        .then((result) => {
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.id === att.id
+                ? { ...a, status: "uploaded", message: result.message }
+                : a,
+            ),
+          );
+        })
+        .catch((err: Error) => {
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.id === att.id
+                ? {
+                    ...a,
+                    status: "error",
+                    message:
+                      err instanceof ChatApiError
+                        ? err.message
+                        : "Upload failed",
+                  }
+                : a,
+            ),
+          );
+        });
     }
 
-    return historyItems.filter((item) =>
-      `${item.title} ${item.preview}`.toLowerCase().includes(query)
+    setAttachments((prev) => [...prev, ...accepted]);
+    // Allow re-selecting the same file again.
+    event.target.value = "";
+  };
+
+  const handleRemoveAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const handleStop = () => {
+    cancelStreamRef.current?.();
+    cancelStreamRef.current = null;
+    setIsStreaming(false);
+    if (!activeConversation) return;
+    updateConversation(activeConversation.id, (c) => {
+      const nextMessages = [...c.messages];
+      for (let i = nextMessages.length - 1; i >= 0; i--) {
+        if (nextMessages[i].role === "assistant" && nextMessages[i].streaming) {
+          nextMessages[i] = {
+            ...nextMessages[i],
+            streaming: false,
+            content:
+              (nextMessages[i].content || "") +
+              (nextMessages[i].content ? "\n\n_(stopped)_" : "_(stopped)_"),
+          };
+          break;
+        }
+      }
+      return { ...c, messages: nextMessages };
+    });
+  };
+
+  const sendMessage = (text: string) => {
+    const trimmed = text.trim();
+    const conv = activeConversation;
+    if (!conv) return;
+    if (!trimmed || isStreaming) return;
+
+    const userMessage: Message = {
+      id: createId(),
+      role: "user",
+      content: trimmed,
+    };
+
+    const isFirstUserMessage =
+      conv.messages.filter((m) => m.role === "user").length === 0;
+
+    // Build the placeholder assistant message we will stream into.
+    const assistantId = createId();
+    const placeholderAssistant: Message = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      streaming: true,
+    };
+
+    updateConversation(conv.id, (c) => ({
+      ...c,
+      messages: [...c.messages, userMessage, placeholderAssistant],
+      title: isFirstUserMessage
+        ? trimmed.length > 40
+          ? `${trimmed.slice(0, 40)}…`
+          : trimmed
+        : c.title,
+      preview: trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed,
+      updatedAt: "Just now",
+    }));
+
+    setDraft("");
+    setIsStreaming(true);
+
+    const onChunk = (chunk: string) => {
+      updateConversation(conv.id, (c) => {
+        const nextMessages = c.messages.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: m.content + chunk, streaming: true }
+            : m,
+        );
+        return { ...c, messages: nextMessages };
+      });
+    };
+
+    const onError = (error: Error) => {
+      const message =
+        error instanceof ChatApiError
+          ? error.message
+          : "Something went wrong while contacting AvikBot.";
+      updateConversation(conv.id, (c) => {
+        const nextMessages = c.messages.map((m) =>
+          m.id === assistantId ? { ...m, streaming: false, error: message } : m,
+        );
+        return { ...c, messages: nextMessages };
+      });
+      setIsStreaming(false);
+      cancelStreamRef.current = null;
+    };
+
+    const onDone = () => {
+      updateConversation(conv.id, (c) => {
+        const nextMessages = c.messages.map((m) =>
+          m.id === assistantId ? { ...m, streaming: false } : m,
+        );
+        return { ...c, messages: nextMessages };
+      });
+      setIsStreaming(false);
+      cancelStreamRef.current = null;
+    };
+
+    if (conv.mode === "rag") {
+      // RAG path is non-streaming for now (backend returns plain text).
+      cancelStreamRef.current = () => undefined;
+      askFromRag(trimmed)
+        .then((answer) => {
+          onChunk(answer);
+          onDone();
+        })
+        .catch((err: Error) => onError(err));
+    } else {
+      cancelStreamRef.current = streamChat(trimmed, onChunk, onError, onDone);
+    }
+  };
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    sendMessage(draft);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage(draft);
+    }
+  };
+
+  const handleStarter = (prompt: string) => {
+    sendMessage(prompt);
+  };
+
+  const handleSignOut = async () => {
+    setIsSigningOut(true);
+    try {
+      cancelStreamRef.current?.();
+      await signOut();
+      router.replace("/");
+    } finally {
+      setIsSigningOut(false);
+    }
+  };
+
+  if (!activeConversation) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background text-foreground">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      </div>
     );
-  }, [historyQuery]);
+  }
+
+  const isEmpty =
+    activeConversation.messages.length === 1 &&
+    activeConversation.messages[0].role === "assistant";
+  const prompts =
+    activeConversation.mode === "rag" ? ragStarterPrompts : starterPrompts;
+  const placeholder =
+    activeConversation.mode === "rag"
+      ? "Ask the knowledge base…"
+      : "Message AvikBot…";
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.96),_rgba(245,240,233,0.94)_35%,_rgba(231,224,214,0.92)_100%)] text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1600px] gap-6 px-4 py-4 lg:px-6 lg:py-6">
-        <aside className="hidden w-[320px] shrink-0 flex-col rounded-[28px] border border-black/8 bg-white/60 p-5 shadow-[0_20px_80px_-40px_rgba(0,0,0,0.35)] backdrop-blur xl:flex">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-foreground/45">
-                Workspace
-              </p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+    <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
+      {/* Sidebar */}
+      <aside
+        className={`flex h-full flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-in-out ${
+          sidebarOpen ? "w-72" : "w-0"
+        } overflow-hidden`}>
+        <div className="flex h-full w-72 flex-col">
+          <div className="flex items-center justify-between px-3 py-3">
+            <div className="flex items-center gap-2 px-2">
+              <div className="flex size-7 items-center justify-center rounded-md bg-foreground text-background">
+                <span className="text-sm font-semibold">A</span>
+              </div>
+              <span className="text-sm font-semibold tracking-tight">
                 AvikBot
-              </h2>
+              </span>
             </div>
-            <Button size="icon" variant="secondary" className="rounded-2xl">
-              <PanelLeft className="size-4" />
-            </Button>
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(false)}
+              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              aria-label="Close sidebar">
+              <PanelLeftClose className="size-4" />
+            </button>
           </div>
 
-          <Card className="mt-6 border-0 bg-[#171717] text-white shadow-none">
-            <CardHeader>
-              <Badge className="w-fit border-white/10 bg-white/10 text-white/70">
-                Pro Assistant
-              </Badge>
-              <CardTitle className="mt-3 text-xl">
-                Focused conversations for serious work
-              </CardTitle>
-              <CardDescription className="text-white/70">
-                Search past chats, jump between sessions, and keep your context
-                close.
-              </CardDescription>
-            </CardHeader>
-          </Card>
+          <div className="px-3">
+            <button
+              type="button"
+              onClick={handleNewChat}
+              className="flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-background px-3 py-2.5 text-sm font-medium transition hover:bg-muted">
+              <MessageSquarePlus className="size-4" />
+              New chat
+            </button>
+          </div>
 
-          <div className="mt-6">
-            <label className="mb-2 block text-sm font-medium text-foreground/70">
-              Search history
-            </label>
+          <div className="mt-4 px-3">
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground/40" />
-              <Input
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
                 value={historyQuery}
                 onChange={(event) => setHistoryQuery(event.target.value)}
-                placeholder="Find a previous conversation"
-                className="pl-9"
+                placeholder="Search chats"
+                className="w-full rounded-md border-0 bg-muted py-2 pl-8 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-foreground/20"
               />
             </div>
           </div>
 
-          <div className="mt-5 flex flex-1 flex-col gap-3 overflow-hidden">
-            {filteredHistory.map((item) => (
-              <button
-                key={item.title}
-                type="button"
-                className="rounded-2xl border border-black/8 bg-white/70 p-4 text-left transition hover:-translate-y-0.5 hover:bg-white"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium">{item.title}</p>
-                    <p className="mt-1 text-sm leading-6 text-foreground/58">
-                      {item.preview}
-                    </p>
+          <div className="mt-4 flex-1 overflow-y-auto px-2 chat-scroll">
+            <p className="px-2 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Recent
+            </p>
+            <div className="flex flex-col gap-0.5">
+              {filteredConversations.map((conversation) => {
+                const isActive = conversation.id === activeId;
+                return (
+                  <div
+                    key={conversation.id}
+                    className={`group relative flex items-center rounded-md transition ${
+                      isActive
+                        ? "bg-muted text-foreground"
+                        : "text-foreground/80 hover:bg-muted"
+                    }`}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectConversation(conversation.id)}
+                      className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-2.5 text-left">
+                      <span className="w-full truncate text-sm">
+                        {conversation.title}
+                      </span>
+                      <span className="w-full truncate text-xs text-muted-foreground">
+                        {conversation.preview}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) =>
+                        handleDeleteConversation(conversation.id, event)
+                      }
+                      className="mr-2 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-background hover:text-foreground"
+                      aria-label="Delete chat">
+                      <X className="size-3.5" />
+                    </button>
                   </div>
-                  <ArrowUpRight className="mt-1 size-4 shrink-0 text-foreground/35" />
-                </div>
-                <p className="mt-3 text-xs uppercase tracking-[0.2em] text-foreground/35">
-                  {item.time}
+                );
+              })}
+              {filteredConversations.length === 0 && (
+                <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                  No chats match your search.
                 </p>
-              </button>
-            ))}
+              )}
+            </div>
           </div>
 
-          <Button className="mt-5 rounded-2xl">
-            <Plus className="size-4" />
-            New chat session
-          </Button>
-        </aside>
+          {user ? (
+            <div className="border-t border-sidebar-border p-3">
+              <div className="flex items-center gap-3 rounded-md p-2">
+                {user.picture ? (
+                  <Image
+                    src={user.picture}
+                    alt={user.name}
+                    width={32}
+                    height={32}
+                    className="size-8 rounded-full"
+                    unoptimized
+                  />
+                ) : (
+                  <div className="flex size-8 items-center justify-center rounded-full bg-foreground text-sm font-semibold text-background">
+                    {user.name.slice(0, 1)}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{user.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {user.email}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+                  aria-label="Sign out"
+                  title={isSigningOut ? "Signing out..." : "Sign out"}>
+                  <LogOut className="size-4" />
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </aside>
 
-        <main className="flex min-h-[calc(100vh-2rem)] flex-1 flex-col rounded-[32px] border border-black/8 bg-white/55 p-4 shadow-[0_24px_90px_-45px_rgba(0,0,0,0.45)] backdrop-blur md:p-6">
-          <div className="flex flex-col gap-4 border-b border-black/8 pb-6 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-2xl">
-              <Badge>Professional AI Workspace</Badge>
-              <h1 className="mt-4 text-3xl font-semibold tracking-tight md:text-5xl">
-                Chat, search history, and PDF intelligence in one clean desk.
-              </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-foreground/62 md:text-base">
-                A refined assistant experience with a searchable sidebar,
-                polished conversation flow, and a document tab for uploading
-                PDFs and asking focused questions.
+      {/* Main */}
+      <main className="relative flex h-full min-w-0 flex-1 flex-col bg-background">
+        {/* Top bar */}
+        <header className="flex h-12 shrink-0 items-center justify-between border-b border-sidebar-border px-3">
+          <div className="flex items-center gap-2">
+            {!sidebarOpen && (
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                aria-label="Open sidebar">
+                <PanelLeftOpen className="size-4" />
+              </button>
+            )}
+            <h1 className="text-sm font-medium">{activeConversation.title}</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <ModeToggle
+              mode={activeConversation.mode}
+              onChange={handleSetMode}
+            />
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div ref={scrollRef} className="chat-scroll flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:py-8">
+            {isEmpty ? (
+              <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
+                <div className="mb-6 flex size-12 items-center justify-center rounded-2xl bg-foreground text-background">
+                  <span className="text-lg font-semibold">A</span>
+                </div>
+                <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                  {activeConversation.mode === "rag"
+                    ? "Ask the knowledge base"
+                    : "How can I help today?"}
+                </h2>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  {activeConversation.mode === "rag"
+                    ? "Attach documents in the composer or ask a question below."
+                    : "Start with a task, a question, or pick one of the suggestions below."}
+                </p>
+                <div className="mt-8 grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                  {prompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => handleStarter(prompt)}
+                      className="rounded-lg border border-sidebar-border bg-background p-3 text-left text-sm text-foreground/80 transition hover:bg-muted">
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-6">
+                {activeConversation.messages.map((message) => (
+                  <ChatMessage key={message.id} message={message} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Composer */}
+        <div className="shrink-0 border-t border-sidebar-border bg-background">
+          <div className="mx-auto w-full max-w-3xl px-4 py-4">
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {attachments.map((att) => (
+                  <AttachmentChip
+                    key={att.id}
+                    attachment={att}
+                    onRemove={handleRemoveAttachment}
+                  />
+                ))}
+              </div>
+            )}
+            <form
+              onSubmit={handleSubmit}
+              className="flex items-end gap-2 rounded-2xl border border-sidebar-border bg-background p-2 shadow-sm transition focus-within:border-foreground/30">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFileSelected}
+              />
+              <button
+                type="button"
+                onClick={handlePickAttachment}
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                aria-label="Attach file">
+                <Paperclip className="size-4" />
+              </button>
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={placeholder}
+                rows={1}
+                className="max-h-[200px] min-h-[36px] flex-1 resize-none border-0 bg-transparent py-2 text-sm leading-6 placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+              />
+              {isStreaming ? (
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground text-background transition hover:bg-foreground/90"
+                  aria-label="Stop generating">
+                  <Square className="size-3.5 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!draft.trim()}
+                  className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground text-background transition hover:bg-foreground/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+                  aria-label="Send message">
+                  <SendHorizontal className="size-4" />
+                </button>
+              )}
+            </form>
+            <p className="mt-2 text-center text-[11px] text-muted-foreground">
+              AvikBot can make mistakes. Verify important info.
+            </p>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function ModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: Mode;
+  onChange: (mode: Mode) => void;
+}) {
+  const isRag = mode === "rag";
+  return (
+    <div
+      role="tablist"
+      aria-label="Response mode"
+      className="inline-flex items-center rounded-full border border-sidebar-border bg-muted p-0.5 text-xs">
+      <button
+        role="tab"
+        type="button"
+        aria-selected={!isRag}
+        onClick={() => onChange("chat")}
+        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 transition ${
+          !isRag
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
+        }`}>
+        <Globe className="size-3.5" />
+        Chat
+      </button>
+      <button
+        role="tab"
+        type="button"
+        aria-selected={isRag}
+        onClick={() => onChange("rag")}
+        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 transition ${
+          isRag
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
+        }`}>
+        <FileText className="size-3.5" />
+        Docs
+      </button>
+    </div>
+  );
+}
+
+function ChatMessage({ message }: { message: Message }) {
+  const isUser = message.role === "user";
+  return (
+    <div
+      className={`flex w-full gap-3 ${
+        isUser ? "justify-end" : "justify-start"
+      }`}>
+      {!isUser && (
+        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
+          <span className="text-xs font-semibold">A</span>
+        </div>
+      )}
+      <div
+        className={`prose-message max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-7 sm:text-[15px] ${
+          isUser ? "bg-foreground text-background" : "bg-muted text-foreground"
+        }`}>
+        {message.error ? (
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-red-500" />
+            <div>
+              <p className="font-medium text-red-600">
+                Couldn&apos;t reach AvikBot
+              </p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-foreground/80">
+                {message.error}
               </p>
             </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Card className="border-black/8 bg-white/70">
-                <CardContent className="flex items-center gap-3 py-5">
-                  <div className="rounded-2xl bg-[#131313] p-3 text-white">
-                    <Sparkles className="size-5" />
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.22em] text-foreground/40">
-                      Active mode
-                    </p>
-                    <p className="mt-1 font-medium">Context-aware assistant</p>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="border-black/8 bg-white/70">
-                <CardContent className="flex items-center gap-3 py-5">
-                  <div className="rounded-2xl bg-[#d7a86e] p-3 text-[#1f140a]">
-                    <FileText className="size-5" />
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.22em] text-foreground/40">
-                      Documents
-                    </p>
-                    <p className="mt-1 font-medium">PDF search ready</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
           </div>
-
-          <Tabs
-            defaultValue="assistant"
-            value={activeTab}
-            onValueChange={setActiveTab}
-            className="mt-6 flex flex-1 flex-col"
-          >
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <TabsList>
-                <TabsTrigger value="assistant">Chat Assistant</TabsTrigger>
-                <TabsTrigger value="pdf">PDF Search</TabsTrigger>
-              </TabsList>
-
-              <div className="flex items-center gap-3">
-                <Badge className="hidden sm:inline-flex">
-                  {activeTab === "assistant"
-                    ? "Live conversation mode"
-                    : "Document research mode"}
-                </Badge>
-                <Button variant="secondary" className="rounded-2xl">
-                  <Stars className="size-4" />
-                  Smart suggestions
-                </Button>
-              </div>
-            </div>
-
-            <TabsContent value="assistant" className="mt-6 flex flex-1 flex-col">
-              <div className="grid flex-1 gap-6 xl:grid-cols-[minmax(0,1.6fr)_360px]">
-                <Card className="border-black/8 bg-white/78">
-                  <CardHeader className="border-b border-black/8 pb-4">
-                    <CardTitle className="text-xl">Conversation</CardTitle>
-                    <CardDescription>
-                      A clean message canvas with a premium editorial feel.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex h-full flex-col gap-4 pt-5">
-                    <div className="flex-1 space-y-4">
-                      {messages.map((message, index) => (
-                        <div
-                          key={`${message.role}-${index}`}
-                          className={`max-w-[85%] rounded-[24px] px-5 py-4 shadow-sm ${
-                            message.role === "assistant"
-                              ? "bg-[#171717] text-white"
-                              : "ml-auto bg-[#efe7dd] text-[#2f251b]"
-                          }`}
-                        >
-                          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] opacity-60">
-                            {message.role}
-                          </p>
-                          <p className="text-sm leading-7">{message.content}</p>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="rounded-[28px] border border-black/8 bg-[#fbfaf7] p-4">
-                      <Textarea
-                        placeholder="Message your assistant with a polished, task-focused prompt..."
-                        className="min-h-32 resize-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
-                      />
-                      <div className="mt-4 flex flex-col gap-3 border-t border-black/8 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex flex-wrap gap-2">
-                          <Badge>Fast replies</Badge>
-                          <Badge>Context retained</Badge>
-                          <Badge>Professional tone</Badge>
-                        </div>
-                        <Button className="rounded-2xl">
-                          <SendHorizonal className="size-4" />
-                          Send message
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <div className="grid gap-6">
-                  <Card className="border-black/8 bg-white/78">
-                    <CardHeader>
-                      <CardTitle>Session overview</CardTitle>
-                      <CardDescription>
-                        Keep the most useful controls visible without clutter.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="grid gap-3">
-                      <div className="rounded-2xl bg-[#f6f1ea] p-4">
-                        <p className="text-xs uppercase tracking-[0.22em] text-foreground/38">
-                          Current task
-                        </p>
-                        <p className="mt-2 font-medium">
-                          Client communication and knowledge work
-                        </p>
-                      </div>
-                      <div className="rounded-2xl bg-[#f8f8f8] p-4">
-                        <p className="text-xs uppercase tracking-[0.22em] text-foreground/38">
-                          Style profile
-                        </p>
-                        <p className="mt-2 font-medium">
-                          Concise, helpful, and executive-ready
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="border-black/8 bg-white/78">
-                    <CardHeader>
-                      <CardTitle>Suggested starters</CardTitle>
-                    </CardHeader>
-                    <CardContent className="grid gap-3">
-                      {[
-                        "Summarize the latest thread into action items.",
-                        "Rewrite this reply in a more professional tone.",
-                        "Compare two onboarding plans and highlight tradeoffs.",
-                      ].map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          className="rounded-2xl border border-black/8 bg-white p-4 text-left text-sm leading-6 text-foreground/72 transition hover:bg-[#faf7f2]"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </CardContent>
-                  </Card>
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="pdf" className="mt-6 flex flex-1 flex-col">
-              <div className="grid flex-1 gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
-                <Card className="border-black/8 bg-white/78">
-                  <CardHeader className="border-b border-black/8 pb-4">
-                    <CardTitle className="text-xl">PDF knowledge search</CardTitle>
-                    <CardDescription>
-                      Upload reference files, index them, then ask precise
-                      questions across your documents.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="grid gap-5 pt-5">
-                    <div className="rounded-[28px] border border-dashed border-black/15 bg-[#fbfaf7] p-6">
-                      <div className="flex flex-col items-start gap-4 md:flex-row md:items-center md:justify-between">
-                        <div className="flex items-start gap-4">
-                          <div className="rounded-2xl bg-[#171717] p-3 text-white">
-                            <Upload className="size-5" />
-                          </div>
-                          <div>
-                            <p className="text-lg font-medium">
-                              Drop PDF files here or browse to upload
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-foreground/58">
-                              Ideal for contracts, manuals, reports, research,
-                              and internal documentation.
-                            </p>
-                          </div>
-                        </div>
-                        <Button className="rounded-2xl">
-                          <Upload className="size-4" />
-                          Upload PDF
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                      <Input placeholder="Ask something like: What are the refund conditions in the policy PDF?" />
-                      <Button className="rounded-2xl">Search document</Button>
-                    </div>
-
-                    <Card className="border-black/8 bg-[#fbfaf7] shadow-none">
-                      <CardHeader>
-                        <CardTitle>Example result</CardTitle>
-                        <CardDescription>
-                          Answers can cite the most relevant section and pull a
-                          concise explanation into view.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="rounded-2xl bg-white p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-foreground/38">
-                            From section 4.2
-                          </p>
-                          <p className="mt-3 text-sm leading-7 text-foreground/74">
-                            Refunds are eligible within 14 days of purchase when
-                            the account has not exceeded usage limits. The answer
-                            panel can also surface nearby clauses for context.
-                          </p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-black/8 bg-white/78">
-                  <CardHeader>
-                    <CardTitle>Indexed library</CardTitle>
-                    <CardDescription>
-                      Recent PDFs stay visible so the workspace always feels
-                      organized.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="grid gap-3">
-                    {indexedFiles.map((file) => (
-                      <div
-                        key={file.name}
-                        className="rounded-2xl border border-black/8 bg-white p-4"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex gap-3">
-                            <div className="rounded-2xl bg-[#f2eadf] p-3 text-[#5b4531]">
-                              <FileText className="size-4" />
-                            </div>
-                            <div>
-                              <p className="font-medium">{file.name}</p>
-                              <p className="mt-1 text-sm text-foreground/52">
-                                {file.size}
-                              </p>
-                            </div>
-                          </div>
-                          <Badge>{file.status}</Badge>
-                        </div>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </main>
+        ) : message.content ? (
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            Thinking…
+          </span>
+        )}
+        {message.streaming && message.content && !message.error && (
+          <span
+            aria-hidden
+            className="ml-0.5 inline-block h-3 w-1.5 translate-y-0.5 animate-pulse rounded-sm bg-current align-middle"
+          />
+        )}
       </div>
+      {isUser && (
+        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
+          <span className="text-xs font-semibold">U</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AttachmentChip({
+  attachment,
+  onRemove,
+}: {
+  attachment: Attachment;
+  onRemove: (id: string) => void;
+}) {
+  const { file, status, message } = attachment;
+  return (
+    <div
+      className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs ${
+        status === "error"
+          ? "border-red-200 bg-red-50 text-red-700"
+          : status === "uploaded"
+            ? "border-green-200 bg-green-50 text-green-700"
+            : "border-sidebar-border bg-muted text-foreground"
+      }`}>
+      {status === "uploading" ? (
+        <Loader2 className="size-3 animate-spin" />
+      ) : status === "uploaded" ? (
+        <CheckCircle2 className="size-3" />
+      ) : status === "error" ? (
+        <AlertTriangle className="size-3" />
+      ) : (
+        <UploadCloud className="size-3" />
+      )}
+      <span className="max-w-[180px] truncate font-medium">{file.name}</span>
+      <span className="text-[10px] opacity-70">{formatBytes(file.size)}</span>
+      {message && status !== "uploading" ? (
+        <span className="max-w-[140px] truncate text-[10px] opacity-70">
+          {message}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => onRemove(attachment.id)}
+        className="-mr-1 inline-flex size-4 items-center justify-center rounded-full opacity-60 transition hover:bg-black/5 hover:opacity-100"
+        aria-label={`Remove ${file.name}`}>
+        <X className="size-2.5" />
+      </button>
     </div>
   );
 }
