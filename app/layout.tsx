@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
 
+//update
+
 export const metadata: Metadata = {
   title: "AvikBot Workspace",
   description: "Professional chatbot and PDF search workspace UI",
